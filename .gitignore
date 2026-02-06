@@ -1,0 +1,45 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Data (if you don't want to commit large datasets)
+data/
+raw_data/
+*.csv
+*.json
+*.h5
+
+
+# Results & outputs
+data/
+outputs/
+
+
+# Environment variables
+.env
+.env.local
+.DS_Store
+
+# Logs
+*.log
