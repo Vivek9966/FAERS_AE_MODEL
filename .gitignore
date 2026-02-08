@@ -34,6 +34,8 @@ raw_data/
 # Results & outputs
 data/
 outputs/
+results_private/
+results
 
 
 # Environment variables
