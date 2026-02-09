@@ -2,7 +2,7 @@ import pandas as pd
 from pathlib import Path
 
 
-MODERN_VALIDATION_CASES = [
+VALIDATION_CASES = [
     {
         'drug': 'ISOTRETINOIN',
         'event': 'DEPRESSION',
@@ -76,12 +76,14 @@ MODERN_VALIDATION_CASES = [
     }
 ]
 
+def validation_cases():
+    return VALIDATION_CASES
 def check_validation():
     RESULTS_DIR = Path("/home/vivekbisht/Desktop/faers-signal-detection/results_private")
     pairs = pd.read_parquet(RESULTS_DIR / 'drug_event_pairs.parquet')      
     found = []
     
-    for case in MODERN_VALIDATION_CASES:
+    for case in VALIDATION_CASES:
         drug_pattern = case['drug']
         event = case['event']
         
@@ -100,3 +102,4 @@ def check_validation():
 
 if __name__ == "__main__":
     found =check_validation()
+    print(f"Found {len(found)} out of {len(VALIDATION_CASES)} validation cases:")
