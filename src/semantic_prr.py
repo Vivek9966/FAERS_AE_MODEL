@@ -1,4 +1,3 @@
-# src/semantic_enhanced_prr.py
 
 import pandas as pd
 import numpy as np
@@ -6,6 +5,7 @@ from scipy import stats
 from pathlib import Path
 from sklearn.metrics.pairwise import cosine_similarity
 import pickle
+import faiss
 
 RESULTS_DIR = Path("/home/vivekbisht/Desktop/faers-signal-detection/results_private")
 EMBEDDINGS_FILE = RESULTS_DIR / 'ae_embeddings_sapbert.npy'
