@@ -1,4 +1,3 @@
-# src/semantic_enhanced_prr.py
 
 import pandas as pd
 import numpy as np
@@ -6,7 +5,9 @@ from scipy import stats
 from pathlib import Path
 from sklearn.metrics.pairwise import cosine_similarity
 import pickle
-
+from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.neighbors import NearestNeighbors
 RESULTS_DIR = Path("/home/vivekbisht/Desktop/faers-signal-detection/results_private")
 EMBEDDINGS_FILE = RESULTS_DIR / 'ae_embeddings_sapbert.npy'
 UNIQUE_AES_FILE = RESULTS_DIR / 'unique_aes.txt'
@@ -16,13 +17,50 @@ class SemanticEnhancedPRR:
         
         self.pairs = pairs_df
         self.total_reports = len(pairs_df)
-        
+        pairs_df['event'] = pairs_df['event'].str.upper()
+        pairs_df['drug'] = pairs_df['drug'].str.upper()
+
+
+        MIN_EVENT_FREQ=50 
+        eve_freq=pairs_df['event'].value_counts()
+        eve_keep = eve_freq[eve_freq>=MIN_EVENT_FREQ].index
+        pairs_df = pairs_df[pairs_df['event'].isin(eve_keep)].copy()        
         self.drug_counts = pairs_df.groupby('drug').size().to_dict()
         self.event_counts = pairs_df.groupby('event').size().to_dict()
         self.combo_counts = pairs_df.groupby(['drug', 'event']).size().to_dict()
+       
+        self.de_mat =(pairs_df.groupby(['event','drug'])).size().unstack(fill_value=0)
+
+        #-------------------------------log--------------------------------# To check the mem requirement tweak MIN_event FREQ and the nneighbotrs
+        nnz = np.count_nonzero(self.de_mat.values)
+        memory_ = self.de_mat.memory_usage(deep =True).sum()
+        print("After filtering MIN_EVENT_FREQ=20")
+        print(f"  Number of remaining events (rows in de_mat): {self.de_mat.shape[0]:,d}")
+        print(f"  Number of drugs (columns in de_mat):         {self.de_mat.shape[1]:,d}")
+        print(f"  Shape of de_mat:                             {self.de_mat.shape}")
+        print(f"  Non-zero elements (sparsity info):           {nnz:,d} / {self.de_mat.size:,d}  "
+            f"({nnz/ self.de_mat.size:.3%} density)")
+        print(f"  Memory estimate for dense array:   ~{memory_ / 1e9:.1f} GB (float64)")
+        # X = normalize(self.de_mat.values, norm='l2')
+        # simi =cosine_similarity(X)
+        # self.co_occurence = pd.DataFrame(simi,index=self.de_mat.index,columns =self.de_mat.index)
+        # ------------------------------log--------------------------------------
+        X = normalize(self.de_mat.values, norm='l2')
+        nn= NearestNeighbors(
+            n_neighbors=50 , metric='euclidean',algorithm='auto' , n_jobs=-1)
         
+        nn.fit(X)
+        dist ,ind =nn.kneighbors(X)
+        events = self.de_mat.index.tolist()
+        self.cooc_knn = {}
+
+        for i ,eve in enumerate(events):
+            sim = 1 - (dist**2)/2
+            self.cooc_knn[eve] = [(events[j],sim[k]) for k,j in enumerate(ind[i]) if j!=i ] 
+
         ae_embeddings_array = np.load(embeddings_path)
         
+
         with open(unique_aes_path, 'r', encoding='utf-8') as f:
             unique_aes_list = [line.strip() for line in f if line.strip()]
         
@@ -37,6 +75,69 @@ class SemanticEnhancedPRR:
             if len(missing_events) <= 10:
                 print(f"Warning: Missing embeddings for events: {missing_events}")
     
+    def hybrid_simi(self,eve_i , eve_j ,alpha=.5):
+        sem = 0.0
+        if eve_i in self.event_embeddings and eve_j in self.event_embeddings:
+            sem = cosine_similarity(
+                [self.event_embeddings[eve_i]],
+                [self.event_embeddings[eve_j]]
+            )[0][0]
+
+        cooc = 0.0
+        for ev, sim in self.cooc_knn.get(eve_i, []):
+            if ev == eve_j:
+                cooc = sim
+                break
+
+        return alpha * sem + (1 - alpha) * cooc
+    def hybrid_neighbours(self, tar_eve, min_simi=0.3, top_k=5, alpha=0.5):
+        scores = []
+
+        for e, _ in self.cooc_knn.get(tar_eve, []):
+            sim = self.hybrid_simi(tar_eve, e, alpha)
+            if sim >= min_simi:
+                scores.append((e, sim))
+
+        scores.sort(key=lambda x: x[1], reverse=True)
+        return scores[:top_k]
+    def pooled_prr(self,drg,eve,top_k=5,alpha=.5):
+
+        a=self.combo_counts.get((drg,eve),0)
+        if a ==0:
+            return None
+        ngbr=self.hybrid_neighbours(eve,top_k=top_k,alpha=alpha)
+
+        pooled_a = float(a)
+        pooled_eve = []
+        for ev,sm in ngbr:
+            cnt = self.combo_counts.get((drg,ev),0)
+            if cnt >= 1:
+                pooled_a += sm*cnt
+                pooled_eve.append({
+                    'event':ev , 'similarity':sm ,'n_classes':cnt 
+                })
+        total_d = self.drug_counts.get(drg,0)
+        total_e = self.event_counts.get(eve, 0)
+        b = total_d - pooled_a
+        c = total_e - pooled_a
+        d = self.total_reports -pooled_a-b-c
+
+        if min(b,c,d)<=0:
+            return None
+        prr =( pooled_a*d) / (b*c)
+        cont_table = np.array([[pooled_a,b],[c,d]])
+        chi2,p_val,_,_ = stats.chi2_contingency(cont_table)
+        return {
+        'drug': drg,
+        'event': eve,
+        'pooled_cases': pooled_a,
+        'prr': prr,
+        'chi2': chi2,
+        'p_value': p_val,
+        'neighbors_used': len(pooled_eve),
+        'neighbors': pooled_eve,
+        'is_signal': (prr >= 2 and chi2 >= 4 and pooled_a >= 3)
+    }
     def get_similar_events(self, target_event, top_k=5, min_similarity=0.85):
         if target_event not in self.event_embeddings:
             return []
@@ -149,18 +250,30 @@ class SemanticEnhancedPRR:
             
             drug = max(matching_drugs, key=lambda d: self.drug_counts[d])
             
-            result = self.calculate_semantic_enhanced_prr(drug, event, top_k=5, min_similarity=0.85)
+            # result = self.pooled_prr(drug,event,top_k=5,alpha=0.5)
             
+            # if result:
+            #     result['expected_prr'] = case.get('expected_prr', 'unknown')
+            #     result['description'] = case.get('description', '')
+            #     results.append(result)
+                
+            baseline = self.calculate_baseline_prr(drug,event)
+            result = self.pooled_prr(drug , event ,top_k=5 ,alpha=.5)
             if result:
-                result['expected_prr'] = case.get('expected_prr', 'unknown')
-                result['description'] = case.get('description', '')
+                if baseline:
+                    result['baseline_prr']  =baseline['prr']
+                    result['baseline_n_cases'] = baseline['n_cases']
+                else:
+                    result['baseline_prr']=np.nan
+                    result['baseline_n_cases'] = 0
+                result['expected_prr'] = case.get('expected_prr','unknown')
+                result['description'] = case.get('description','')
                 results.append(result)
-                
-                
-                if result['similar_events_used'] > 0:
-                    print(f"Top similar events:")
-                    for se in result['similar_events'][:3]:
-                        print(f"{se['event'][:50]:50s} (sim={se['similarity']:.3f}, PRR={se['prr']:.2f})")
+                if result['neighbors_used'] > 0:
+                    print("Top hybrid neighbors:")
+                    for se in result['neighbors'][:3]:
+                        print(f"{se['event'][:50]:50s} (sim={se['similarity']:.3f})")
+
             else:
                 print(f"  {i}. {drug} + {event} - NO DATA")
         
@@ -183,8 +296,9 @@ if __name__ == "__main__":
     if len(comparison_results) > 0:
         output_path = RESULTS_DIR / 'semantic_enhanced_validation.csv'
         comparison_results.to_csv(output_path, index=False)
-        avg_improvement = comparison_results['improvement'].mean()
-        improved_count = (comparison_results['improvement'] > 0).sum()
-        summary_cols = ['drug', 'event', 'prr', 'enhanced_prr', 'improvement', 'similar_events_used']
+        # avg_improvement = comparison_results['improvement'].mean()
+        # improved_count = (comparison_results['improvement'] > 0).sum()
+        # summary_cols = ['drug', 'event', 'prr', 'enhanced_prr', 'improvement', 'similar_events_used']
+        summary_cols = ['drug', 'event', 'prr', 'pooled_cases', 'neighbors_used']
         print(comparison_results[summary_cols].to_string(index=False))
  

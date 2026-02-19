@@ -69,9 +69,9 @@ class PRRCalculator:
                 result['expected_prr'] = case.get('expected_prr', 'unknown')
                 result['description'] = case.get('description', '')
                 results.append(result)
-                print(f"  ✓ {drug__} + {event}: PRR={result['prr']:.2f}, n={result['n_cases']}")
+                print(f"   {drug__} + {event}: PRR={result['prr']:.2f}, n={result['n_cases']}")
             else:
-                print(f"  ✗ No data for: {drug} + {event}")
+                print(f"   No data for: {drug} + {event}")
                 
         return pd.DataFrame(results)
 
